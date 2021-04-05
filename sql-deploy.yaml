@@ -1,0 +1,114 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cloud formation template containing EMR launcher 
+Parameters:
+  #include "include/paramsfromregionroot.yaml"
+  client:
+    Type: String
+    Description: Client
+  account:
+    Type: String
+    Description: Account
+  TargetDB:
+    Type: String
+    Description: The database that the sql code will run on
+    Default: Athena
+  CreateSqlS3Key:
+    Description: S3 Key of the file that contains the Create DDL queries
+    Type: String
+  DeleteSqlS3Key:
+    Description: S3 Key of the file that contains the Delete DDL queries
+    Type: String
+  Datasource:
+    Description: Name of the datasource e.g dcm, facebook, twitter etc
+    Type: String
+
+Mappings:
+    #include "include/mapping_envs.yaml"
+    #include "include/mapping_regions.yaml"
+Resources:
+  LambdaRolePolicy:
+      Type: AWS::IAM::Policy
+      Properties:
+        PolicyName: LambdaRolePolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            - logs:DescribeLogStreams
+            - logs:DescribeLogGroups
+            - iam:PassRole
+            - s3:GetObject
+            - s3:PutObject
+            - s3:ListBucket
+            - s3:GetBucketPolicy
+            - athena:BatchGetNamedQuery
+            - athena:BatchGetQueryExecution
+            - athena:CancelQueryExecution
+            - athena:DeleteNamedQuery
+            - athena:GetCatalogs
+            - athena:GetExecutionEngine
+            - athena:GetExecutionEngines
+            - athena:GetNamedQuery
+            - athena:GetNamespace
+            - athena:GetNamespaces
+            - athena:GetQueryExecution
+            - athena:GetQueryExecutions
+            - athena:GetQueryResults
+            - athena:GetTable
+            - athena:GetTables
+            - athena:ListNamedQueries
+            - athena:ListQueryExecutions
+            - athena:RunQuery
+            - athena:StartQueryExecution
+            - athena:StopQueryExecution
+            Resource:
+            - '*'
+            Effect: Allow
+        Roles:
+        - !Ref 'LambdaRole'
+        
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+
+  SqlDeployLambda:
+    DependsOn: LambdaRolePolicy
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['-',['sql-deploy', !Ref 'client', !Ref 'account', !Ref 'envname', !Ref 'microenv', !Ref 'Datasource']]
+      Handler: sql_deploy_custom_resource_lambda.lambda_handler
+      MemorySize: 128
+      Code:
+        S3Bucket: !Ref 'repobucket'
+        S3Key: repos/lambda/sql_deploy_custom_resource_lambda.zip
+      Runtime: python2.7    
+      Role: !GetAtt [LambdaRole, Arn]
+      Timeout: 300
+
+  SqlDeployLambdaAttach:
+        Type: Custom::SqlDeployLambdaAttach
+        Properties:
+          CreateSqlS3KeyProperty: !Ref 'CreateSqlS3Key'
+          DeleteSqlS3KeyProperty: !Ref 'DeleteSqlS3Key'
+          DDLBucketProperty: !Ref 'repobucket'    
+          DataBucketProperty: !Join ['-', [dadl, !Ref 'AWS::Region', !Ref 'client', !Ref 'account', !Ref 'envname', !Ref 'microenv']]
+          AthenaSqlOutputUriProperty: !Join ['-', ['s3://aws-athena-query-results', !Ref 'AWS::AccountId', !Ref 'AWS::Region']] 
+          ClientProperty: !Ref 'client'
+          AccountProperty: !Ref 'account'
+          EnvnameProperty: !Ref 'envname'
+          MicroenvProperty: !Ref 'microenv'
+          TargetDBProperty: !Ref 'TargetDB'
+          TargetDBJDBCUrlProperty: !Join ['.', ['jdbc:awsathena://athena', !Ref 'AWS::Region', 'amazonaws.com:443']]
+          ServiceToken: !GetAtt [SqlDeployLambda, Arn]
